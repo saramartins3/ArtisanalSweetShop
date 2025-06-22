@@ -6,134 +6,104 @@ import com.example.ArtisanalSweetShopping.com.example.ArtisanalSweetShopping.Exc
 import com.example.ArtisanalSweetShopping.com.example.ArtisanalSweetShopping.Exception.DBConnectionException;
 import com.example.ArtisanalSweetShopping.com.example.ArtisanalSweetShopping.Exception.OperationException;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 public class ScontoControl {
 
-    private static final Map<String, ScontoEntity> scontiTemporanei = new HashMap<>();
+    public static class Input {
+        // operazioni possibili: "CREA", "AGGIORNA", "ELIMINA", "LEGGI_TUTTI"
+        public String operazione;
 
-    public static class InputSconto {
+        // campi usati da CREA/AGGIORNA
         public String codiceSconto;
-        public float percentuale;
-        public int idImpiegato;
-        public boolean utilizzato;
+        public Float percentuale;
+        public Integer idImpiegato;
+        public Boolean utilizzato;
     }
 
-    public static class OutputSconto {
+    public static class Output {
         public ScontoEntity sconto;
+        public List<ScontoEntity> lista;
         public String messaggio;
 
-        public OutputSconto(ScontoEntity sconto, String messaggio) {
+        public Output(ScontoEntity sconto, String messaggio) {
             this.sconto = sconto;
             this.messaggio = messaggio;
         }
-    }
 
-    /**
-     * Inserisce un nuovo sconto nel sistema e lo memorizza temporaneamente.
-     * @param input dati dello sconto (codice, percentuale, impiegato, stato di utilizzo)
-     * @return OutputSconto contenente l'entità appena salvata e un messaggio di conferma
-     * @throws OperationException in caso di errore nel salvataggio
-     */
-    public OutputSconto creaSconto(InputSconto input) throws OperationException {
-        if (input.codiceSconto == null || input.codiceSconto.isBlank()) {
-            throw new OperationException("Codice sconto mancante o vuoto.");
-        }
-        if (input.percentuale <= 0 || input.percentuale > 100) {
-            throw new OperationException("Percentuale non valida. Deve essere tra 0 e 100.");
-        }
-
-        try {
-            ScontoEntity sconto = new ScontoEntity(
-                    input.codiceSconto,
-                    input.percentuale,
-                    input.idImpiegato,
-                    input.utilizzato
-            );
-            ScontoDAO.inserisciSconto(sconto);
-            scontiTemporanei.put(sconto.getCodiceSconto(), sconto);
-            return new OutputSconto(sconto, "Sconto inserito correttamente.");
-        } catch (DAOException | DBConnectionException e) {
-            throw new OperationException("Errore durante l'inserimento dello sconto.");
+        public Output(List<ScontoEntity> lista) {
+            this.lista = lista;
         }
     }
 
     /**
-     * Aggiorna uno sconto esistente nel sistema.
-     * @param input dati aggiornati dello sconto
-     * @return OutputSconto contenente l'entità aggiornata e un messaggio di conferma
-     * @throws OperationException in caso di codice assente o errore nel salvataggio
+     * Unico metodo “menu‐driven” per gestire tutti i casi:
+     * CREA, AGGIORNA, ELIMINA, LEGGI_TUTTI.
      */
-    public OutputSconto aggiornaSconto(InputSconto input) throws OperationException {
-        if (input.codiceSconto == null || input.codiceSconto.isBlank()) {
-            throw new OperationException("Codice sconto mancante o vuoto.");
-        }
-        if (input.percentuale <= 0 || input.percentuale > 100) {
-            throw new OperationException("Percentuale non valida. Deve essere tra 0 e 100.");
-        }
-        if (!ScontoDAO.codiceEsistente(input.codiceSconto)) {
-            throw new OperationException("Codice sconto inesistente. Nessuno sconto aggiornato.");
+    public Output gestisciSconto(Input in) throws OperationException {
+        if (in.operazione == null || in.operazione.isBlank()) {
+            throw new OperationException("Operazione mancante.");
         }
 
         try {
-            ScontoEntity sconto = new ScontoEntity(
-                    input.codiceSconto,
-                    input.percentuale,
-                    input.idImpiegato,
-                    input.utilizzato
-            );
-            ScontoDAO.aggiornaSconto(sconto);
-            scontiTemporanei.put(sconto.getCodiceSconto(), sconto);
-            return new OutputSconto(sconto, "Sconto aggiornato correttamente.");
-        } catch (DAOException | DBConnectionException e) {
-            throw new OperationException("Errore durante l’aggiornamento dello sconto.");
-        }
-    }
+            switch (in.operazione.toUpperCase()) {
 
-    /**
-     * Elimina uno sconto presente nel sistema e nella memoria temporanea.
-     * @param codiceSconto codice identificativo dello sconto da eliminare
-     * @return messaggio di conferma
-     * @throws OperationException in caso di codice mancante o errore nel salvataggio
-     */
-    public String eliminaSconto(String codiceSconto) throws OperationException {
-        if (codiceSconto == null || codiceSconto.isBlank()) {
-            throw new OperationException("Codice sconto mancante.");
-        }
-        if (!ScontoDAO.codiceEsistente(codiceSconto)) {
-            throw new OperationException("Codice sconto inesistente. Nessuna eliminazione effettuata.");
-        }
+                case "CREA":
+                    if (in.codiceSconto == null || in.codiceSconto.isBlank()) {
+                        throw new OperationException("Codice sconto mancante o vuoto.");
+                    }
+                    if (in.percentuale == null || in.percentuale <= 0 || in.percentuale > 100) {
+                        throw new OperationException("Percentuale non valida (0<%≤100).");
+                    }
+                    ScontoEntity nuovo = new ScontoEntity(
+                        in.codiceSconto,
+                        in.percentuale,
+                        in.idImpiegato == null ? 0 : in.idImpiegato,
+                        in.utilizzato == null ? false : in.utilizzato
+                    );
+                    ScontoDAO.inserisciSconto(nuovo);
+                    return new Output(nuovo, "Sconto creato con successo.");
 
-        try {
-            ScontoDAO.eliminaSconto(codiceSconto);
-            if (scontiTemporanei.containsKey(codiceSconto)) {
-                scontiTemporanei.remove(codiceSconto);
+                case "AGGIORNA":
+                    if (in.codiceSconto == null || in.codiceSconto.isBlank()) {
+                        throw new OperationException("Codice sconto mancante o vuoto.");
+                    }
+                    if (in.percentuale == null || in.percentuale <= 0 || in.percentuale > 100) {
+                        throw new OperationException("Percentuale non valida (0<%≤100).");
+                    }
+                    if (!ScontoDAO.codiceEsistente(in.codiceSconto)) {
+                        throw new OperationException("Codice sconto inesistente.");
+                    }
+                    ScontoEntity upd = new ScontoEntity(
+                        in.codiceSconto,
+                        in.percentuale,
+                        in.idImpiegato == null ? 0 : in.idImpiegato,
+                        in.utilizzato == null ? false : in.utilizzato
+                    );
+                    ScontoDAO.aggiornaSconto(upd);
+                    return new Output(upd, "Sconto aggiornato con successo.");
+
+                case "ELIMINA":
+                    if (in.codiceSconto == null || in.codiceSconto.isBlank()) {
+                        throw new OperationException("Codice sconto mancante.");
+                    }
+                    if (!ScontoDAO.codiceEsistente(in.codiceSconto)) {
+                        throw new OperationException("Codice sconto inesistente.");
+                    }
+                    ScontoDAO.eliminaSconto(in.codiceSconto);
+                    return new Output(null, "Sconto eliminato con successo.");
+
+                case "LEGGI_TUTTI":
+                    List<ScontoEntity> all = ScontoDAO.leggiTuttiSconti();
+                    return new Output(all);
+
+                default:
+                    throw new OperationException("Operazione non riconosciuta: " + in.operazione);
             }
-            return "Sconto eliminato correttamente.";
+
         } catch (DAOException | DBConnectionException e) {
-            throw new OperationException("Errore durante l’eliminazione dello sconto.");
+            throw new OperationException("Errore interno: " + e.getMessage());
         }
     }
+}
 
-    /**
-     * Recupera tutti gli sconti presenti nel sistema.
-     * @return lista di ScontoEntity presenti nel database
-     * @throws OperationException in caso di errore di accesso
-     */
-    public List<ScontoEntity> leggiTuttiSconti() throws OperationException {
-        try {
-            return ScontoDAO.leggiTuttiSconti();
-        } catch (DAOException | DBConnectionException e) {
-            throw new OperationException("Errore durante il recupero degli sconti.");
-        }
-    }
-
-    /**
-     * Recupera dalla cache uno sconto temporaneamente salvato.
-     * @param codiceSconto codice identificativo
-     * @return entità trovata o null
-     */
-    public ScontoEntity leggiTemporaneo(String codiceSconto) {
-        return scontiTemporanei.get(codiceSconto
