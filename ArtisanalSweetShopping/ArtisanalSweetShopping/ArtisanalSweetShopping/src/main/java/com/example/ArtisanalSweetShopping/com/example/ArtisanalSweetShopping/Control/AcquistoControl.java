@@ -1,44 +1,22 @@
 package com.example.ArtisanalSweetShopping.com.example.ArtisanalSweetShopping.Control;
 
-import java.sql.Date;
-import java.time.LocalTime;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
-import javax.management.OperationsException;
-import javax.swing.table.DefaultTableCellRenderer;
-
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RestController;
-
+import com.example.ArtisanalSweetShopping.com.example.ArtisanalSweetShopping.Database.*;
+import com.example.ArtisanalSweetShopping.com.example.ArtisanalSweetShopping.Entity.*;
 import com.example.ArtisanalSweetShopping.com.example.ArtisanalSweetShopping.Exception.DAOException;
 import com.example.ArtisanalSweetShopping.com.example.ArtisanalSweetShopping.Exception.DBConnectionException;
 import com.example.ArtisanalSweetShopping.com.example.ArtisanalSweetShopping.Exception.OperationException;
-import com.example.ArtisanalSweetShopping.com.example.ArtisanalSweetShopping.Entity.DettagliOrdineEntity;
-import com.example.ArtisanalSweetShopping.com.example.ArtisanalSweetShopping.Database.DettaglioOrdineDAO;
-import com.example.ArtisanalSweetShopping.com.example.ArtisanalSweetShopping.Entity.ProdottoEntity;
-import com.example.ArtisanalSweetShopping.com.example.ArtisanalSweetShopping.Entity.ScontoEntity;
-import com.example.ArtisanalSweetShopping.com.example.ArtisanalSweetShopping.Entity.ClienteRegistratoEntity;
-import com.example.ArtisanalSweetShopping.com.example.ArtisanalSweetShopping.Entity.OrdineEntity;
-import com.example.ArtisanalSweetShopping.com.example.ArtisanalSweetShopping.Database.ClienteRegistratoDAO;
-import com.example.ArtisanalSweetShopping.com.example.ArtisanalSweetShopping.Database.OrdineDAO;
-import com.example.ArtisanalSweetShopping.com.example.ArtisanalSweetShopping.Database.ProdottoDAO;
-import com.example.ArtisanalSweetShopping.com.example.ArtisanalSweetShopping.Database.ScontoDAO;
 
-@RestController
-public class AcquistoControl {
+import java.sql.Date;
+import java.util.*;
 
-    private static final Map<Integer, List<DettagliOrdineEntity>> carrelliInAttesa = new HashMap<>();
+public class AcquistoOnlineControl{
+
+	private static final Map<Integer, List<DettagliOrdineEntity>> carrelliInAttesa = new HashMap<>();
     private static final Map<Integer, OrdineEntity> ordiniTemporanei = new HashMap<>();
     private static final Map<Integer, String> cartaCreditoTemporanea = new HashMap<>();
     private static int nextIdCarrello = 1;
     private static final int SOGLIA_CLIENTE_ABITUALE = 3;
 
-    // DTO
     public static class ProdottoQuantita {
         public String codiceProdotto;
         public int quantita;
@@ -68,18 +46,19 @@ public class AcquistoControl {
 
     public static class OutputPagamentoFallito {
         public String messaggio;
-        public String suggerimento;
 
-        public OutputPagamentoFallito(String messaggio, String suggerimento) {
+        public OutputPagamentoFallito(String messaggio) {
             this.messaggio = messaggio;
-            this.suggerimento = suggerimento;
         }
     }
 
-    // Endpoint per avviare ordine
-    @PostMapping("/checkout")
-    public Object avviaOrdine(@RequestBody InputOrdine input) throws OperationException {
+    public OutputOrdine AcquistoOnline(InputOrdine input) throws OperationException {
         try {
+            ClienteRegistratoEntity cliente = ClienteRegistratoDAO.leggiCliente(input.nomeUtente);
+            if (cliente == null) {
+                throw new OperationException("Utente non trovato.");
+            }
+
             float totale = 0f;
             List<DettagliOrdineEntity> dettagli = new ArrayList<>();
 
@@ -88,114 +67,112 @@ public class AcquistoControl {
                 if (prod == null || prod.getQuantitaDisponibile() < p.quantita) {
                     throw new OperationException("Prodotto non disponibile: " + p.codiceProdotto);
                 }
-
                 totale += prod.getPrezzo() * p.quantita;
                 dettagli.add(new DettagliOrdineEntity(0, p.codiceProdotto, p.quantita));
             }
 
-            if (input.codiceSconto != null && !input.codiceSconto.isEmpty()) {
+            if (input.codiceSconto != null && !input.codiceSconto.trim().isEmpty()) {
+                if (cliente.getNumeroOrdini() < SOGLIA_CLIENTE_ABITUALE) {
+                    throw new OperationException("Sconto riservato ai clienti abituali.");
+                }
                 ScontoEntity sconto = ScontoDAO.leggiScontoValido(input.codiceSconto);
                 if (sconto == null) {
-                    return new OutputPagamentoFallito("Codice sconto non valido.", "Puoi riprovare con un altro codice o procedere senza sconto.");
+                    throw new OperationException("Codice sconto non valido.");
                 }
                 totale -= totale * sconto.getPercentuale() / 100;
             }
 
-            ClienteRegistratoEntity cliente = ClienteRegistratoDAO.leggiCliente(input.nomeUtente);
-            String carta = (cliente != null && cliente.getNumeroTelefono() != null)
-                    ? cliente.getNumeroCarta()
-                    : input.cartaCredito;
-
-            if (carta == null || carta.length() < 12) {
-                return new OutputPagamentoFallito("Carta di credito non valida o non fornita.", "Inserisci una carta valida per procedere all’acquisto.");
+            String carta;
+            if (cliente.getNumeroCarta() != null && !cliente.getNumeroCarta().isEmpty()) {
+                carta = cliente.getNumeroCarta();
+            } else {
+                carta = input.cartaCredito;
             }
 
-            int id = nextIdCarrello++;
-            OrdineEntity ordine = new OrdineEntity(0, new Date(System.currentTimeMillis()), totale, "IN_CORSO", input.nomeUtente, input.codiceSconto, input.indirizzo);
+            if (carta == null || carta.length() < 12) {
+                throw new OperationException("Carta non valida o non fornita.");
+            }
 
-            ordiniTemporanei.put(id, ordine);
-            carrelliInAttesa.put(id, dettagli);
-            cartaCreditoTemporanea.put(id, carta);
+            int idCarrello = nextIdCarrello++;
 
-            return new OutputOrdine(dettagli, totale, "Ordine preparato, pronto alla conferma", id);
+            OrdineEntity ordine = new OrdineEntity(0, new Date(System.currentTimeMillis()), totale,
+                    "in_corso", input.nomeUtente, input.codiceSconto, input.indirizzo);
+
+            ordiniTemporanei.put(idCarrello, ordine);
+            carrelliInAttesa.put(idCarrello, dettagli);
+            cartaCreditoTemporanea.put(idCarrello, carta);
+
+            return new OutputOrdine(dettagli, totale, "Ordine in attesa di conferma", idCarrello);
 
         } catch (DAOException | DBConnectionException e) {
-            throw new OperationException("Errore durante la preparazione dell’ordine.");
+            throw new OperationException("Errore nella preparazione dell'ordine: " + e.getMessage());
         }
     }
 
-    // Endpoint per confermare ordine
-    @PostMapping("/checkout/conferma/{id}")
-    public Object confermaOrdine(@PathVariable int id) throws OperationException {
+    public String confermaOrdine(int idCarrello) throws OperationException {
         try {
-            if (!ordiniTemporanei.containsKey(id)) {
-                return new OutputPagamentoFallito("Carrello non trovato", "Ricomincia il checkout.");
+            if (!ordiniTemporanei.containsKey(idCarrello)) {
+                throw new OperationException("Carrello non trovato.");
             }
 
-            OrdineEntity ordine = ordiniTemporanei.get(id);
-            String carta = cartaCreditoTemporanea.get(id);
+            OrdineEntity ordine = ordiniTemporanei.get(idCarrello);
+            String carta = cartaCreditoTemporanea.get(idCarrello);
 
-            if (!PagamentoService.eseguiPagamento(carta, ordine.getCostoTotale())) {
-                return new OutputPagamentoFallito("Pagamento rifiutato.", "Puoi riprovare il pagamento o annullare l’acquisto.");
+            if (!eseguiPagamento(carta, ordine.getCostoTotale())) {
+                return "Pagamento rifiutato";
             }
 
-            ordine.setStato("ORDINATA");
-            OrdineDAO.creaOrdine(ordine);
+            ordine.setStato("ordinata");
+            ordine = OrdineDAO.creaOrdine(ordine);
+            int ordineId = ordine.getIdOrdine();
 
-            for (DettagliOrdineEntity d : carrelliInAttesa.get(id)) {
-                d.setIdOrdine(ordine.getIdOrdine());
+            for (DettagliOrdineEntity d : carrelliInAttesa.get(idCarrello)) {
+                d.setIdOrdine(ordineId);
                 DettaglioOrdineDAO.aggiungiDettaglio(d);
 
-                ProdottoEntity prod = ProdottoDAO.leggiProdotto(d.getCodiceProdotto());
-                prod.setQuantitaDisponibile(prod.getQuantitaDisponibile() - d.getQuantita());
-                ProdottoDAO.aggiornaProdotto(prod);
+                ProdottoEntity p = ProdottoDAO.leggiProdotto(d.getCodiceProdotto());
+                p.setQuantitaDisponibile(p.getQuantitaDisponibile() - d.getQuantita());
+                ProdottoDAO.aggiornaProdotto(p);
             }
 
             if (ordine.getCodiceSconto() != null) {
                 ScontoDAO.segnaScontoComeUtilizzato(ordine.getCodiceSconto());
             }
 
+            ClienteRegistratoDAO.incrementaNumeroOrdini(ordine.getNomeUtente());
             ClienteRegistratoEntity cliente = ClienteRegistratoDAO.leggiCliente(ordine.getNomeUtente());
+
             if (cliente != null) {
-                ClienteRegistratoDAO.incrementaNumeroOrdini(cliente.getNomeUtente());
                 System.out.println("Email inviata a " + cliente.getEmail());
                 System.out.println("SMS inviato a " + cliente.getNumeroTelefono());
 
-                if (cliente.getNumeroOrdini() + 1 >= SOGLIA_CLIENTE_ABITUALE) {
-                    System.out.println("Cliente " + cliente.getNomeUtente() + " ora è cliente abituale!");
+                if (cliente.getNumeroOrdini() >= SOGLIA_CLIENTE_ABITUALE) {
+                    System.out.println("Cliente abituale confermato: " + cliente.getNomeUtente());
                 }
             }
 
-            System.out.println("Notifica al fattorino per l’ordine #" + ordine.getIdOrdine());
+            ordiniTemporanei.remove(idCarrello);
+            carrelliInAttesa.remove(idCarrello);
+            cartaCreditoTemporanea.remove(idCarrello);
 
-            // Pulizia
-            ordiniTemporanei.remove(id);
-            carrelliInAttesa.remove(id);
-            cartaCreditoTemporanea.remove(id);
-
-            return "Ordine confermato con successo! ID ordine: " + ordine.getIdOrdine();
+            return "Ordine confermato con successo! ID: " + ordineId;
 
         } catch (DAOException | DBConnectionException e) {
-            throw new OperationException("Errore nella conferma dell’ordine: " + e.getMessage());
+            throw new OperationException("Errore nella conferma dell'ordine: " + e.getMessage());
         }
     }
 
-    // Endpoint per annullare ordine
-    @PostMapping("/checkout/annulla/{id}")
-    public String annullaOrdine(@PathVariable int id) throws OperationException {
-        if (!ordiniTemporanei.containsKey(id)) {
-            throw new OperationException("ID carrello non valido o già confermato.");
+    public String annullaOrdine(int idCarrello) throws OperationException {
+        if (!ordiniTemporanei.containsKey(idCarrello)) {
+            throw new OperationException("Nessun ordine temporaneo corrispondente all'ID indicato.");
         }
-        ordiniTemporanei.remove(id);
-        carrelliInAttesa.remove(id);
-        cartaCreditoTemporanea.remove(id);
-        return "Carrello annullato correttamente.";
+        ordiniTemporanei.remove(idCarrello);
+        carrelliInAttesa.remove(idCarrello);
+        cartaCreditoTemporanea.remove(idCarrello);
+        return "Carrello annullato con successo.";
     }
 
-    // Simulazione servizio di pagamento
-    static class PagamentoService {
-        public static boolean eseguiPagamento(String cartaCredito, float importo) {
-            return cartaCredito != null && cartaCredito.length() >= 12 && !cartaCredito.contains("0000");
-        }
+    private boolean eseguiPagamento(String cartaCredito, float importo) {
+        return cartaCredito != null && cartaCredito.length() >= 12 && !cartaCredito.contains("0000");
     }
 }
